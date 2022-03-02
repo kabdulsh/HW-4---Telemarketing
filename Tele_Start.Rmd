@@ -1,0 +1,134 @@
+---
+title: "HW6 Telemarketing"
+author: "Khalid Abdulshafi"
+date: "3/22/2020"
+output:
+  html_document:
+    toc: true
+    theme: readable
+    highlight: tango
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Downloading and Prepping the Data
+
+```{r}
+# Download & prepare data
+tele <- read.csv("tele.csv", stringsAsFactors = TRUE)
+
+# Delete "duration" variable b/c it's an after the fact measurement. 
+# Only use variables known before call
+tele$duration <- NULL
+
+# Delete column X
+tele$X <- NULL
+
+# Change pdays to a dummy variable, and delete pdays
+tele$pdaysdummy <- ifelse(tele$pdays == 999, 0, 1)
+tele$pdays <- NULL
+
+# Convert a factored, categorical variable to a numeric variable
+tele[sapply(tele, is.factor)] <- data.matrix(tele[sapply(tele, is.factor)])
+```
+
+## Getting Data Ready for Analysis
+
+```{r}
+# Randomize rows in data
+set.seed(414)
+tele_random <- tele[sample(nrow(tele)),]
+
+# Normalize data
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+library(dplyr)
+tele_norm <- tele_random%>%mutate_if(is.numeric, normalize)
+```
+
+
+## Getting Train and Test Samples
+
+```{r}
+# Select 10,000 random rows for test data
+set.seed(414)
+test_set <- sample(1:nrow(tele_norm), 10000) 
+
+# Create train set & test set
+tele_train <- tele_norm[-test_set,]
+tele_test <- tele_norm[test_set,]
+
+# Create separate data frame for 'y' feature, which is our target
+tele_train_labels <- tele_norm[-test_set, 19]
+tele_test_labels <- tele_norm[test_set, 19]
+```
+
+> Now you are ready to build your ANN model. Feel free to modify the data load, cleaning and preparation code above as per your preference.
+
+```{r, cache=TRUE}
+library(neuralnet)
+nn <- neuralnet(y ~ ., data = tele_train, hidden = 1)
+nn$result.matrix
+plot(nn)
+
+# Test resulting output
+# Remove dependent variables
+temp_test <- subset(tele_test[-19])
+head(temp_test)
+nn_results <- compute(nn, temp_test)
+results <- data.frame(actual = tele_test$y, prediction = nn_results$net.result)
+head(results)
+
+# Confusion Matrix
+library(caret)
+rounded_results <- sapply(results, round, digits = 0)
+rounded_results_df <- data.frame(rounded_results)
+attach(rounded_results_df)
+confusionMatrix(table(actual, prediction))
+```
+
+```{r}
+library(class)
+library(gmodels)
+# Run kNN Algorithm
+kneighbors <- round(sqrt(nrow(tele_norm)))
+knn_pred <- knn(train = tele_train, test = tele_test, cl = tele_train_labels, k = kneighbors)
+# Evaluate model performance
+CrossTable(x = tele_test_labels, y = knn_pred, prop.chisq=FALSE)
+confusionMatrix(as.factor(tele_test_labels), knn_pred)
+```
+
+```{r}
+# Build a model with y-intercept only
+# To be used in stepwise regression
+FitStart <- glm(y ~ 1, data = tele_train, family = "binomial")
+# Build a model with all variables
+FitAll <- glm(y ~ ., data = tele_train, family = "binomial")
+# Use stepwise regression to find best model
+step(FitStart, direction = "both", scope = formula(FitAll))
+```
+
+```{r}
+lg <- glm(formula = y ~ nr.employed + pdaysdummy + month + poutcome + 
+    contact + cons.conf.idx + default + campaign + euribor3m + 
+    emp.var.rate + cons.price.idx + day_of_week + education + 
+    marital + age, family = "binomial", data = tele_train)
+results <- ifelse(predict(lg, newdata = tele_test, type = "response") > 0.5, 1 , 0)
+CrossTable(x = tele_test$y, y = results, prop.chisq=FALSE)
+confusionMatrix(as.factor(tele_test$y), as.factor(results))
+```
+
+```{r}
+# Make a copy of tele_test to avoid any problems.
+copy_tele_test <- tele_test
+# Predicted majority
+copy_tele_test$pred_majority <- as.factor(ifelse(prediction==1 & knn_pred==1,1,ifelse(prediction==1 & results==1,1,ifelse(knn_pred==1 & results==1,1,0))))
+# Compare/Contrast
+confusionMatrix(as.factor(copy_tele_test$y), as.factor(copy_tele_test$pred_majority))
+```
+
